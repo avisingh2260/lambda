@@ -1,0 +1,32 @@
+
+import json
+import psycopg2
+import ibm_db_dbi as dbi
+
+def lambda_handler(event, context):
+    # Connect to DB2
+    db2_conn = dbi.connect("DATABASE=your_db_name;HOSTNAME=your_host_name;PORT=your_port;PROTOCOL=TCPIP;UID=your_user_id;PWD=your_password;", "", "")
+    db2_cursor = db2_conn.cursor()
+    
+    # Connect to PostgreSQL
+    pg_conn = psycopg2.connect(database="your_db_name", user="your_user_id", password="your_password", host="your_host_name", port="your_port")
+    pg_cursor = pg_conn.cursor()
+    
+    # Execute SELECT statement on DB2
+    db2_cursor.execute("SELECT * FROM your_table_name")
+    
+    # Iterate over DB2 results and insert into PostgreSQL
+    for row in db2_cursor.fetchall():
+        pg_cursor.execute("INSERT INTO your_table_name (column1, column2, column3) VALUES (%s, %s, %s)", (row[0], row[1], row[2]))
+    
+    # Commit changes and close connections
+    pg_conn.commit()
+    pg_conn.close()
+    db2_conn.commit()
+    db2_conn.close()
+    
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Data transferred successfully')
+    }
+
