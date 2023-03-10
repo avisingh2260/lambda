@@ -1,63 +1,71 @@
-import json
-import psycopg2
-import ibm_db_dbi as dbi
-import boto3
-from botocore.exceptions import ClientError
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 
-def get_secret(secret_name):
-    session = boto3.session.Session()
-    client = session.client(
-        service_name='secretsmanager',
-        region_name="your_region"
-    )
-    try:
-        get_secret_value_response = client.get_secret_value(
-            SecretId=secret_name
-        )
-    except ClientError as e:
-        raise e
-    else:
-        if 'SecretString' in get_secret_value_response:
-            secret = json.loads(get_secret_value_response['SecretString'])
-            return secret
-        else:
-            decoded_binary_secret = base64.b64decode(get_secret_value_response['SecretBinary'])
-            return decoded_binary_secret
+import com.mongodb.MongoClient;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
 
+import java.util.List;
 
-def lambda_handler(event, context):
-    # Fetch DB2 credentials from Secrets Manager
-    db2_secret = get_secret("your_db2_secret_name")
-    db2_username = db2_secret['username']
-    db2_password = db2_secret['password']
+public class DB2ToMongoDBTransfer {
 
-    # Connect to DB2
-    db2_conn = dbi.connect(f"DATABASE=your_db_name;HOSTNAME=your_host_name;PORT=your_port;PROTOCOL=TCPIP;UID={db2_username};PWD={db2_password};", "", "")
-    db2_cursor = db2_conn.cursor()
+    private JdbcTemplate jdbcTemplate;
+    private MongoClient mongoClient;
+    private MongoDatabase mongoDatabase;
+    private MongoCollection<Document> mongoCollection;
 
-    # Fetch PostgreSQL credentials from Secrets Manager
-    pg_secret = get_secret("your_postgres_secret_name")
-    pg_username = pg_secret['username']
-    pg_password = pg_secret['password']
-
-    # Connect to PostgreSQL
-    pg_conn = psycopg2.connect(database="your_db_name", user=pg_username, password=pg_password, host="your_host_name", port="your_port")
-    pg_cursor = pg_conn.cursor()
-
-    # Execute SELECT statement on DB2
-    db2_cursor.execute("SELECT * FROM your_table_name")
-
-    # Iterate over DB2 results and insert into PostgreSQL
-    for row in db2_cursor.fetchall():
-        pg_cursor.execute("INSERT INTO your_table_name (column1, column2, column3) VALUES (%s, %s, %s)", (row[0], row[1], row[2]))
-
-    # Commit changes and close connections
-    pg_conn.commit()
-    pg_conn.close()
-    db2_conn.commit()
-    db2_conn.close()
-
-    return {
-        'statusCode': 200,
-        'body': json.dumps('Data transferred successfully')
+    public DB2ToMongoDBTransfer(JdbcTemplate jdbcTemplate, MongoClient mongoClient, String mongoDatabaseName, String mongoCollectionName) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.mongoClient = mongoClient;
+        this.mongoDatabase = mongoClient.getDatabase(mongoDatabaseName);
+        this.mongoCollection = mongoDatabase.getCollection(mongoCollectionName);
     }
+
+    public void transfer() {
+        List<Data> dataList = jdbcTemplate.query("SELECT * FROM data_table", new DataMapper());
+        for (Data data : dataList) {
+            mongoCollection.insertOne(convertToDocument(data));
+        }
+    }
+
+    private Document convertToDocument(Data data) {
+        Document document = new Document();
+        document.append("id", data.getId());
+        document.append("name", data.getName());
+        document.append("value", data.getValue());
+        return document;
+    }
+
+    private static class Data {
+        private int id;
+        private String name;
+        private String value;
+
+        public Data(int id, String name, String value) {
+            this.id = id;
+            this.name = name;
+            this.value = value;
+        }
+
+        public int getId() {
+            return id;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public String getValue() {
+            return value;
+        }
+    }
+
+    private static class DataMapper implements RowMapper<Data> {
+        public Data mapRow(ResultSet resultSet, int rowNum) throws SQLException {
+            int id = resultSet.getInt("id");
+            String name = resultSet.getString("name");
+            String value = resultSet.getString("value");
+            return new Data(id, name, value);
+        }
+    }
+}
