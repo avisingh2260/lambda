@@ -1,71 +1,78 @@
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
 
-import com.mongodb.MongoClient;
-import com.mongodb.client.MongoCollection;
-import com.mongodb.client.MongoDatabase;
+import com.amazonaws.auth.AWSStaticCredentialsProvider;
+import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.client.builder.AwsClientBuilder;
+import com.amazonaws.regions.Regions;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
+import com.amazonaws.services.dynamodbv2.document.DynamoDB;
+import com.amazonaws.services.dynamodbv2.document.Item;
+import com.amazonaws.services.dynamodbv2.document.Table;
+import com.amazonaws.services.secretsmanager.AWSSecretsManager;
+import com.amazonaws.services.secretsmanager.AWSSecretsManagerClientBuilder;
+import com.amazonaws.services.secretsmanager.model.GetSecretValueRequest;
+import com.amazonaws.services.secretsmanager.model.GetSecretValueResult;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.util.List;
+public class DB2ToDynamoDBWithSecretsManager {
 
-public class DB2ToMongoDBTransfer {
+    public static void main(String[] args) {
+        
+        // Retrieve the database credentials from AWS Secrets Manager
+        String secretName = "<secret_name>";
+        String region = "<region>";
+        AWSSecretsManager client = AWSSecretsManagerClientBuilder.standard()
+            .withRegion(region)
+            .build();
+        GetSecretValueRequest request = new GetSecretValueRequest()
+            .withSecretId(secretName);
+        GetSecretValueResult result = client.getSecretValue(request);
+        String secret = result.getSecretString();
+        ObjectMapper objectMapper = new ObjectMapper();
+        SecretData secretData = objectMapper.readValue(secret, SecretData.class);
 
-    private JdbcTemplate jdbcTemplate;
-    private MongoClient mongoClient;
-    private MongoDatabase mongoDatabase;
-    private MongoCollection<Document> mongoCollection;
+        // Establish a connection to the DB2 database using the retrieved credentials
+        String dbUrl = "jdbc:db2://<host>:<port>/<database>";
+        String user = secretData.username;
+        String password = secretData.password;
+        String query = "<SELECT query>";
+        try (Connection conn = DriverManager.getConnection(dbUrl, user, password);
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
 
-    public DB2ToMongoDBTransfer(JdbcTemplate jdbcTemplate, MongoClient mongoClient, String mongoDatabaseName, String mongoCollectionName) {
-        this.jdbcTemplate = jdbcTemplate;
-        this.mongoClient = mongoClient;
-        this.mongoDatabase = mongoClient.getDatabase(mongoDatabaseName);
-        this.mongoCollection = mongoDatabase.getCollection(mongoCollectionName);
-    }
+            // Create an instance of the AmazonDynamoDB client and set the appropriate credentials to access DynamoDB
+            BasicAWSCredentials credentials = new BasicAWSCredentials(secretData.accessKeyId, secretData.secretAccessKey);
+            AmazonDynamoDB clientDynamoDB = AmazonDynamoDBClientBuilder.standard()
+                    .withCredentials(new AWSStaticCredentialsProvider(credentials))
+                    .withRegion(Regions.US_EAST_1)
+                    .build();
+            DynamoDB dynamoDB = new DynamoDB(clientDynamoDB);
 
-    public void transfer() {
-        List<Data> dataList = jdbcTemplate.query("SELECT * FROM data_table", new DataMapper());
-        for (Data data : dataList) {
-            mongoCollection.insertOne(convertToDocument(data));
+            // Create a DynamoDB table with the appropriate schema to store the data from DB2
+            Table table = dynamoDB.createTable("<table_name>",
+                    Arrays.asList(new KeySchemaElement("<primary_key>", KeyType.HASH)),
+                    Arrays.asList(new AttributeDefinition("<primary_key>", ScalarAttributeType.S)),
+                    new ProvisionedThroughput(10L, 10L));
+            table.waitForActive();
+
+            // Iterate through the data retrieved from DB2 and insert each item into the DynamoDB table
+            while (rs.next()) {
+                Item item = new Item()
+                        .withPrimaryKey("<primary_key>", rs.getString("<primary_key_column>"))
+                        .withString("<attribute_1>", rs.getString("<attribute_1_column>"))
+                        .withString("<attribute_2>", rs.getString("<attribute_2_column>"))
+                        // Add more attributes as needed
+                        ;
+                table.putItem(item);
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
-
-    private Document convertToDocument(Data data) {
-        Document document = new Document();
-        document.append("id", data.getId());
-        document.append("name", data.getName());
-        document.append("value", data.getValue());
-        return document;
-    }
-
-    private static class Data {
-        private int id;
-        private String name;
-        private String value;
-
-        public Data(int id, String name, String value) {
-            this.id = id;
-            this.name = name;
-            this.value = value;
-        }
-
-        public int getId() {
-            return id;
-        }
-
-        public String getName() {
-            return name;
-        }
-
-        public String getValue() {
-            return value;
-        }
-    }
-
-    private static class DataMapper implements RowMapper<Data> {
-        public Data mapRow(ResultSet resultSet, int rowNum) throws SQLException {
-            int id = resultSet.getInt("id");
-            String name = resultSet.getString("name");
-            String value = resultSet.getString("value");
-            return new Data(id, name, value);
-        }
-    }
-}
+    
+    private static
