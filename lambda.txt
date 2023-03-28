@@ -1,78 +1,40 @@
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.Statement;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
-import com.amazonaws.auth.AWSStaticCredentialsProvider;
-import com.amazonaws.auth.BasicAWSCredentials;
-import com.amazonaws.client.builder.AwsClientBuilder;
-import com.amazonaws.regions.Regions;
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
-import com.amazonaws.services.dynamodbv2.document.DynamoDB;
-import com.amazonaws.services.dynamodbv2.document.Item;
-import com.amazonaws.services.dynamodbv2.document.Table;
-import com.amazonaws.services.secretsmanager.AWSSecretsManager;
-import com.amazonaws.services.secretsmanager.AWSSecretsManagerClientBuilder;
-import com.amazonaws.services.secretsmanager.model.GetSecretValueRequest;
-import com.amazonaws.services.secretsmanager.model.GetSecretValueResult;
-import com.fasterxml.jackson.databind.ObjectMapper;
+public class DB2ToPostgreSQLTransfer {
 
-public class DB2ToDynamoDBWithSecretsManager {
+  public static void main(String[] args) {
+    // Create DB2 data source
+    DriverManagerDataSource db2DataSource = new DriverManagerDataSource();
+    db2DataSource.setDriverClassName("com.ibm.db2.jcc.DB2Driver");
+    db2DataSource.setUrl("jdbc:db2://localhost:50000/DBNAME");
+    db2DataSource.setUsername("DB2_USERNAME");
+    db2DataSource.setPassword("DB2_PASSWORD");
 
-    public static void main(String[] args) {
-        
-        // Retrieve the database credentials from AWS Secrets Manager
-        String secretName = "<secret_name>";
-        String region = "<region>";
-        AWSSecretsManager client = AWSSecretsManagerClientBuilder.standard()
-            .withRegion(region)
-            .build();
-        GetSecretValueRequest request = new GetSecretValueRequest()
-            .withSecretId(secretName);
-        GetSecretValueResult result = client.getSecretValue(request);
-        String secret = result.getSecretString();
-        ObjectMapper objectMapper = new ObjectMapper();
-        SecretData secretData = objectMapper.readValue(secret, SecretData.class);
+    // Create PostgreSQL data source
+    DriverManagerDataSource postgreDataSource = new DriverManagerDataSource();
+    postgreDataSource.setDriverClassName("org.postgresql.Driver");
+    postgreDataSource.setUrl("jdbc:postgresql://localhost:5432/DBNAME");
+    postgreDataSource.setUsername("POSTGRE_USERNAME");
+    postgreDataSource.setPassword("POSTGRE_PASSWORD");
 
-        // Establish a connection to the DB2 database using the retrieved credentials
-        String dbUrl = "jdbc:db2://<host>:<port>/<database>";
-        String user = secretData.username;
-        String password = secretData.password;
-        String query = "<SELECT query>";
-        try (Connection conn = DriverManager.getConnection(dbUrl, user, password);
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(query)) {
+    // Create JdbcTemplate instances for both data sources
+    JdbcTemplate db2JdbcTemplate = new JdbcTemplate(db2DataSource);
+    JdbcTemplate postgreJdbcTemplate = new JdbcTemplate(postgreDataSource);
 
-            // Create an instance of the AmazonDynamoDB client and set the appropriate credentials to access DynamoDB
-            BasicAWSCredentials credentials = new BasicAWSCredentials(secretData.accessKeyId, secretData.secretAccessKey);
-            AmazonDynamoDB clientDynamoDB = AmazonDynamoDBClientBuilder.standard()
-                    .withCredentials(new AWSStaticCredentialsProvider(credentials))
-                    .withRegion(Regions.US_EAST_1)
-                    .build();
-            DynamoDB dynamoDB = new DynamoDB(clientDynamoDB);
+    // Query data from DB2
+    List<Map<String, Object>> data = db2JdbcTemplate.queryForList("SELECT * FROM TABLE_NAME");
 
-            // Create a DynamoDB table with the appropriate schema to store the data from DB2
-            Table table = dynamoDB.createTable("<table_name>",
-                    Arrays.asList(new KeySchemaElement("<primary_key>", KeyType.HASH)),
-                    Arrays.asList(new AttributeDefinition("<primary_key>", ScalarAttributeType.S)),
-                    new ProvisionedThroughput(10L, 10L));
-            table.waitForActive();
-
-            // Iterate through the data retrieved from DB2 and insert each item into the DynamoDB table
-            while (rs.next()) {
-                Item item = new Item()
-                        .withPrimaryKey("<primary_key>", rs.getString("<primary_key_column>"))
-                        .withString("<attribute_1>", rs.getString("<attribute_1_column>"))
-                        .withString("<attribute_2>", rs.getString("<attribute_2_column>"))
-                        // Add more attributes as needed
-                        ;
-                table.putItem(item);
-            }
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+    // Insert data into PostgreSQL
+    for (Map<String, Object> row : data) {
+      postgreJdbcTemplate.update(
+        "INSERT INTO TABLE_NAME (COLUMN1, COLUMN2) VALUES (?, ?)",
+        row.get("COLUMN1"),
+        row.get("COLUMN2")
+      );
     }
-    
-    private static
+
+    System.out.println("Data transfer complete.");
+  }
+
+}
