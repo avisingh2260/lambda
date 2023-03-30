@@ -1,0 +1,95 @@
+import javax.sql.DataSource;
+import org.springframework.integration.support.locks.LockRegistry;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.lookup.JndiDataSourceLookup;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+
+@EnableScheduling
+public class DB2ToPostgreSQLTransfer {
+
+  private final DataSource db2DataSource;
+  private final DataSource postgreDataSource;
+  private final JdbcTemplate db2JdbcTemplate;
+  private final JdbcTemplate postgreJdbcTemplate;
+  private final LockRegistry lockRegistry;
+
+  public DB2ToPostgreSQLTransfer(LockRegistry lockRegistry) {
+    // Create DB2 data source
+    db2DataSource = createDataSource("jdbc/db2DataSource");
+
+    // Create PostgreSQL data source
+    postgreDataSource = createDataSource("jdbc/postgreDataSource");
+
+    // Create JdbcTemplate instances for both data sources
+    db2JdbcTemplate = new JdbcTemplate(db2DataSource);
+    postgreJdbcTemplate = new JdbcTemplate(postgreDataSource);
+
+    // Store the LockRegistry instance
+    this.lockRegistry = lockRegistry;
+  }
+
+  @Scheduled(cron = "0 0 6 * * *", zone = "America/New_York")
+  public void transferData() {
+    // Acquire a lock
+    Lock lock = lockRegistry.obtain("transferDataLock");
+    boolean lockAcquired = false;
+    try {
+      lockAcquired = lock.tryLock(10, TimeUnit.SECONDS);
+      if (!lockAcquired) {
+        System.out.println("Could not acquire lock. Skipping data transfer.");
+        return;
+      }
+
+      // Get the max create_timestamp value in PostgreSQL
+      LocalDateTime maxCreateTimestamp = postgreJdbcTemplate.queryForObject(
+        "SELECT MAX(create_timestamp) FROM TABLE_NAME",
+        LocalDateTime.class
+      );
+      if (maxCreateTimestamp == null) {
+        maxCreateTimestamp = LocalDateTime.MIN;
+      }
+
+      // Query delta data from DB2
+      List<Map<String, Object>> deltaData = db2JdbcTemplate.queryForList(
+        "SELECT * FROM TABLE_NAME WHERE create_timestamp > ?",
+        maxCreateTimestamp
+      );
+
+      // Insert delta data into PostgreSQL
+      for (Map<String, Object> row : deltaData) {
+        postgreJdbcTemplate.update(
+          "INSERT INTO TABLE_NAME (doc_id, create_timestamp, COLUMN1, COLUMN2) VALUES (?, ?, ?, ?)",
+          row.get("doc_id"),
+          row.get("create_timestamp"),
+          row.get("COLUMN1"),
+          row.get("COLUMN2")
+        );
+      }
+
+      System.out.println("Data transfer complete.");
+    } catch (Exception e) {
+      e.printStackTrace();
+    } finally {
+      // Release the lock
+      if (lockAcquired) {
+        lock.unlock();
+      }
+    }
+  }
+
+  private static DataSource createDataSource(String jndiName) {
+    try {
+      // Try to get the data source from the JNDI context
+      JndiDataSourceLookup dataSourceLookup = new JndiDataSourceLookup();
+      DataSource dataSource = dataSourceLookup.getDataSource(jndiName);
+      return dataSource;
+    } catch (Exception e) {
+      // If the data source cannot be found in JNDI, create
