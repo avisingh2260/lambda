@@ -1,66 +1,29 @@
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ec2:Describe*",
-        "ec2:CreateKeyPair",
-        "ec2:ImportKeyPair",
-        "ec2:RunInstances",
-        "ec2:TerminateInstances",
-        "ec2:StopInstances",
-        "ec2:StartInstances",
-        "s3:GetObject",
-        "s3:ListBucket",
-        "s3:PutObject",
-        "iam:PassRole",
-        "iam:GetRole",
-        "iam:CreateRole",
-        "iam:AttachRolePolicy",
-        "rds:Describe*",
-        "rds:CreateDBInstance",
-        "rds:DeleteDBInstance",
-        "elasticloadbalancing:Describe*",
-        "elasticloadbalancing:CreateLoadBalancer",
-        "elasticloadbalancing:DeleteLoadBalancer",
-        "sns:Publish",
-        "sqs:SendMessage",
-        "ssm:SendCommand",
-        "ssm:ListCommandInvocations",
-        "ssm:GetCommandInvocation",
-        "lambda:CreateFunction",
-        "lambda:InvokeFunction",
-        "dynamodb:Describe*",
-        "dynamodb:CreateTable",
-        "dynamodb:DeleteTable",
-        "kinesis:PutRecord",
-        "kms:Encrypt",
-        "kms:Decrypt",
-        "vpc:Describe*",
-        "vpc:CreateVpc",
-        "vpc:DeleteVpc",
-        "subnet:Describe*",
-        "subnet:CreateSubnet",
-        "subnet:DeleteSubnet",
-        "securitygroup:Describe*",
-        "securitygroup:CreateSecurityGroup",
-        "securitygroup:DeleteSecurityGroup",
-        "route53:List*",
-        "route53:Get*",
-        "route53:ChangeResourceRecordSets",
-        "autoscaling:Describe*",
-        "autoscaling:CreateAutoScalingGroup",
-        "autoscaling:DeleteAutoScalingGroup"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "terraform:*
-      ],
-      "Resource": "*"
-    }
-  ]
-}
+---
+schemaVersion: "0.3"
+description: "Terminate active EC2 instances one by one with a 10-minute interval"
+
+parameters: {}
+
+mainSteps:
+  - name: "GetActiveInstances"
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "EC2"
+      Api: "describeInstances"
+      Filters:
+        - Name: "instance-state-name"
+          Values:
+            - "running"
+    outputs:
+      - Name: "InstanceId"
+        Selector: "$.Reservations[*].Instances[*].InstanceId"
+
+  - name: "TerminateInstance"
+    action: "aws:executeAwsApi"
+    maxAttempts: 1
+    inputs:
+      Service: "EC2"
+      Api: "terminateInstances"
+      InstanceIds:
+        - "{{ GetActiveInstances.InstanceId }}"
+    waitTime: 600
