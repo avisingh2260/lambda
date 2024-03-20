@@ -1,29 +1,46 @@
----
-schemaVersion: "0.3"
-description: "Terminate active EC2 instances one by one with a 10-minute interval"
+schemaVersion: "2.2"
+description: "Terminate EC2 instances with a gap of 10 minutes"
 
-parameters: {}
+parameters:
+  - name: "AWSRegion"
+    type: "String"
+    description: "The AWS region where the EC2 instances are located."
 
 mainSteps:
-  - name: "GetActiveInstances"
-    action: "aws:executeAwsApi"
+  - action: "aws:runShellScript"
+    name: "terminateEC2Instances"
     inputs:
-      Service: "EC2"
-      Api: "describeInstances"
-      Filters:
-        - Name: "instance-state-name"
-          Values:
-            - "running"
-    outputs:
-      - Name: "InstanceId"
-        Selector: "$.Reservations[*].Instances[*].InstanceId"
-
-  - name: "TerminateInstance"
-    action: "aws:executeAwsApi"
-    maxAttempts: 1
-    inputs:
-      Service: "EC2"
-      Api: "terminateInstances"
-      InstanceIds:
-        - "{{ GetActiveInstances.InstanceId }}"
-    waitTime: 600
+      runCommand:
+        - "pip install boto3"  # Install Boto3 library if not already installed
+        - "python - <<EOF"
+        - "import boto3"
+        - "import time"
+        - ""
+        - "def get_running_instances():"
+        - "    ec2 = boto3.client('ec2', region_name='$AWSRegion')"
+        - "    response = ec2.describe_instances(Filters=[{'Name': 'instance-state-name', 'Values': ['running']}])"
+        - "    instances = []"
+        - "    for reservation in response['Reservations']:"
+        - "        for instance in reservation['Instances']:"
+        - "            instances.append(instance['InstanceId'])"
+        - "    return instances"
+        - ""
+        - "def terminate_instance(instance_id):"
+        - "    ec2 = boto3.client('ec2', region_name='$AWSRegion')"
+        - "    ec2.terminate_instances(InstanceIds=[instance_id])"
+        - ""
+        - "def main():"
+        - "    instances = get_running_instances()"
+        - "    if not instances:"
+        - "        print('No running instances found.')"
+        - "        return"
+        - ""
+        - "    print('Terminating instances:')"
+        - "    for instance_id in instances:"
+        - "        print('Terminating instance:', instance_id)"
+        - "        terminate_instance(instance_id)"
+        - "        time.sleep(600)  # Sleep for 10 minutes (600 seconds) before terminating the next instance"
+        - ""
+        - "if __name__ == '__main__':"
+        - "    main()"
+        - "EOF"
